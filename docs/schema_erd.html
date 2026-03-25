@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>Receipt AI — Schema ERD 비교</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.6.1/mermaid.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      padding: 32px 24px;
+    }
+    h1 {
+      text-align: center;
+      font-size: 1.4rem;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #f8fafc;
+    }
+    .subtitle {
+      text-align: center;
+      font-size: 0.85rem;
+      color: #94a3b8;
+      margin-bottom: 40px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 28px;
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+    .card {
+      background: #1e2330;
+      border-radius: 14px;
+      padding: 28px 24px;
+      border: 1px solid #2d3748;
+    }
+    .card-title {
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .card-title.before { color: #f87171; }
+    .card-title.after  { color: #34d399; }
+    .card-desc {
+      font-size: 0.78rem;
+      color: #94a3b8;
+      margin-bottom: 20px;
+      line-height: 1.5;
+    }
+    .mermaid { width: 100%; }
+
+    .changes {
+      max-width: 1400px;
+      margin: 36px auto 0;
+      background: #1e2330;
+      border-radius: 14px;
+      padding: 28px 28px;
+      border: 1px solid #2d3748;
+    }
+    .changes h2 {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: #f8fafc;
+      margin-bottom: 18px;
+    }
+    .change-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+    .change-item {
+      background: #111827;
+      border-radius: 10px;
+      padding: 14px 16px;
+      border-left: 3px solid;
+    }
+    .change-item.add    { border-color: #34d399; }
+    .change-item.modify { border-color: #fbbf24; }
+    .change-item.remove { border-color: #f87171; }
+    .change-item .tag {
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 6px;
+    }
+    .change-item.add    .tag { color: #34d399; }
+    .change-item.modify .tag { color: #fbbf24; }
+    .change-item.remove .tag { color: #f87171; }
+    .change-item .title {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #f1f5f9;
+      margin-bottom: 4px;
+    }
+    .change-item .desc {
+      font-size: 0.75rem;
+      color: #94a3b8;
+      line-height: 1.5;
+    }
+
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: 1fr; }
+      .change-grid { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<h1>Receipt AI — DB 스키마 ERD 비교</h1>
+<p class="subtitle">현재 구조 vs 기획 기반 제안 구조 · 2026-03-25</p>
+
+<div class="grid">
+
+  <!-- ① 현재 스키마 -->
+  <div class="card">
+    <div class="card-title before">① 현재 스키마</div>
+    <div class="card-desc">
+      categories 세분화(8개), items이 receipts.details JSONB에 묻힘<br>
+      date 필드가 DATE 타입이라 시간 소실 · 감정/구매방식 필드 없음
+    </div>
+    <div class="mermaid">
+erDiagram
+  CATEGORIES {
+    int id PK
+    text name UK
+    text icon
+  }
+  PAYMENT_METHODS {
+    int id PK
+    text name UK
+  }
+  RECEIPTS {
+    int id PK
+    int category_id FK
+    int payment_method_id FK
+    date date
+    int total_amount
+    text store_name
+    text image_path
+    jsonb details
+    timestamptz created_at
+  }
+
+  CATEGORIES ||--o{ RECEIPTS : "category_id"
+  PAYMENT_METHODS ||--o{ RECEIPTS : "payment_method_id"
+    </div>
+  </div>
+
+  <!-- ② 제안 스키마 -->
+  <div class="card">
+    <div class="card-title after">② 제안 스키마</div>
+    <div class="card-desc">
+      categories → 3개 대분류로 단순화 · receipt_items 테이블 분리<br>
+      paid_at(TIMESTAMPTZ) · purchase_type · memo(감정) 필드 추가
+    </div>
+    <div class="mermaid">
+erDiagram
+  CATEGORIES {
+    int id PK
+    text name UK
+    text icon
+  }
+  PAYMENT_METHODS {
+    int id PK
+    text name UK
+  }
+  RECEIPTS {
+    int id PK
+    uuid user_id FK
+    int category_id FK
+    int payment_method_id FK
+    text purchase_type
+    text store_name
+    int total_amount
+    timestamptz paid_at
+    text memo
+    text image_path
+    timestamptz created_at
+  }
+  RECEIPT_ITEMS {
+    int id PK
+    int receipt_id FK
+    text name
+    int quantity
+    int price
+    text activity_tag
+  }
+
+  CATEGORIES ||--o{ RECEIPTS : "category_id"
+  PAYMENT_METHODS ||--o{ RECEIPTS : "payment_method_id"
+  RECEIPTS ||--o{ RECEIPT_ITEMS : "receipt_id"
+    </div>
+  </div>
+
+</div>
+
+<!-- 변경 요약 -->
+<div class="changes">
+  <h2>변경 사항 요약</h2>
+  <div class="change-grid">
+
+    <div class="change-item modify">
+      <div class="tag">수정</div>
+      <div class="title">categories — 단순화</div>
+      <div class="desc">8개 → 3개 대분류<br>식음료 / 이동·교통 / 생활·기타<br>세밀 분석은 items.activity_tag로 이관</div>
+    </div>
+
+    <div class="change-item modify">
+      <div class="tag">수정</div>
+      <div class="title">receipts.date → paid_at</div>
+      <div class="desc">DATE → TIMESTAMPTZ<br>시간 정보 보존 → 야간/주말 패턴 분석 가능</div>
+    </div>
+
+    <div class="change-item add">
+      <div class="tag">추가</div>
+      <div class="title">receipts.purchase_type</div>
+      <div class="desc">delivery · takeout · dine_in<br>배달 비율, 포장 빈도 통계의 핵심 축</div>
+    </div>
+
+    <div class="change-item add">
+      <div class="tag">추가</div>
+      <div class="title">receipts.memo</div>
+      <div class="desc">감정·상황 메모 (자유 텍스트)<br>"스트레스 받아서 야식" 같은 개인화 기록<br>RAG 검색 소스로도 활용 예정</div>
+    </div>
+
+    <div class="change-item add">
+      <div class="tag">추가</div>
+      <div class="title">receipt_items 테이블 분리</div>
+      <div class="desc">details JSONB → 정규화된 테이블<br>activity_tag 필드로 카페인·알코올·야식 태깅<br>SQL 집계·인덱스 활용 가능</div>
+    </div>
+
+    <div class="change-item add">
+      <div class="tag">추가</div>
+      <div class="title">receipt_items.activity_tag</div>
+      <div class="desc">caffeine · alcohol · snack · meal · null<br>품목 키워드 룰 기반 자동 태깅<br>행동 패턴 분석의 핵심 필드</div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      primaryColor: '#1e3a5f',
+      primaryTextColor: '#e2e8f0',
+      primaryBorderColor: '#3b82f6',
+      lineColor: '#64748b',
+      secondaryColor: '#1e2d40',
+      tertiaryColor: '#0f1117'
+    },
+    er: { diagramPadding: 20, layoutDirection: 'TB', minEntityWidth: 100, minEntityHeight: 75 }
+  });
+</script>
+</body>
+</html>
