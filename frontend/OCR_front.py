@@ -135,6 +135,26 @@ def page_upload():
             parsed_category = ocr_data.get("category", "기타")
             validation_status = ocr_data.get("validation_status", "error")
 
+            # LLM 추론 사전 실행 (expander 바깥에서 캐싱 — 블로킹 방지)
+            raw_text_for_llm = ocr_data.get("raw_text", "")
+
+            infer_cache_key = f"pt_inferred_{file.name}"
+            if infer_cache_key not in st.session_state:
+                from services.ai.purchase_type_inferrer import infer_purchase_type
+                st.session_state[infer_cache_key] = infer_purchase_type(
+                    raw_text=raw_text_for_llm,
+                    items=ocr_data.get("items", []),
+                )
+            inferred_pt = st.session_state[infer_cache_key]
+            PT_DB_TO_LABEL = {v: k for k, v in PURCHASE_TYPE_OPTIONS.items()}
+            inferred_label = PT_DB_TO_LABEL.get(inferred_pt, "간편")
+
+            items_cache_key = f"items_inferred_{file.name}"
+            if items_cache_key not in st.session_state:
+                from services.ai.item_inferrer import infer_items
+                st.session_state[items_cache_key] = infer_items(raw_text_for_llm)
+            inferred_items = st.session_state[items_cache_key]
+
             with st.expander(f"📄 영수증 #{idx+1} : {file.name}", expanded=True):
                 col_img, col_form = st.columns([1, 2])
 
@@ -167,16 +187,21 @@ def page_upload():
 
                     selected_cat_id = st.session_state['categories'].get(category)
 
+                    pt_options = list(PURCHASE_TYPE_OPTIONS.keys())
+                    pt_default_idx = pt_options.index(inferred_label) if inferred_label in pt_options else 0
                     purchase_type_label = st.selectbox(
                         "식사 방식",
-                        list(PURCHASE_TYPE_OPTIONS.keys()),
+                        pt_options,
+                        index=pt_default_idx,
                         key=f"pt_{idx}"
                     )
 
                     memo = st.text_input("메모 (일기)", key=f"memo_{idx}")
 
-                    # 품목 확인 및 수정 (항상 표시)
-                    raw_items = ocr_data.get("items", [])
+                    # 품목 확인 및 수정 (항상 LLM 추출 — 사전 캐싱된 결과 사용)
+                    raw_items = inferred_items
+                    st.caption(f"품목 출처: 😉🆗 LLM ({len(raw_items)}건)")
+
                     items_df = pd.DataFrame(
                         [{"품목명": i.get("name", ""), "수량": i.get("quantity", 1), "단가": i.get("price", 0)}
                          for i in raw_items]
@@ -284,6 +309,9 @@ def page_upload():
                 st.balloons()
                 st.success(f"✅ {success_count}건 저장 완료!" + (f" ({fail_count}건 실패)" if fail_count else ""))
             st.session_state['ocr_results'] = {}
+            for key in list(st.session_state.keys()):
+                if key.startswith("pt_inferred_") or key.startswith("items_inferred_"):
+                    del st.session_state[key]
             time.sleep(1)
             st.rerun()
 
