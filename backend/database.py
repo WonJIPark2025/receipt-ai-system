@@ -60,7 +60,7 @@ def test_connection() -> bool:
     try:
         client = get_client()
         # 간단한 쿼리로 연결 확인
-        client.table("users").select("id").limit(1).execute()
+        client.table("categories").select("id").limit(1).execute()
         return True
     except Exception as e:
         print(f"❌ 연결 실패: {e}")

@@ -41,7 +41,7 @@ def main():
     print("\n[3] 테이블 조회 테스트...")
     client = get_client()
 
-    tables = ["users", "categories", "payment_methods", "receipts"]
+    tables = ["categories", "receipts", "receipt_items"]
     for table in tables:
         try:
             result = client.table(table).select("*").limit(1).execute()

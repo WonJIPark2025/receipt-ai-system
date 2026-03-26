@@ -6,7 +6,6 @@ OCR_front.py - 데스크톱 전용 UI
     - app.py에서 데스크톱 감지 시 이 파일로 분기
     - wide 레이아웃, 사이드바 메뉴 구성
 포함 기능:
-    - Supabase 로그인/회원가입 + localStorage 로그인 유지
     - OCR 파이프라인 영수증 인식 + DB/Storage 저장
     - 지출 분석 (연월 선택, 막대/선 그래프, 파이 차트)
     - AI 월별 조언 (Gemini)
@@ -20,156 +19,35 @@ import tempfile
 import os
 import sys
 from pathlib import Path
-from streamlit_js_eval import streamlit_js_eval
 
-# 프로젝트 루트를 path에 추가 (backend 모듈 import를 위해) - app.py에 추가됨
-#sys.path.insert(0, str(Path(__file__).parent.parent))
+# 프로젝트 루트를 path에 추가 (backend 모듈 import를 위해)
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from backend.api.users import get_user_by_user_id, create_user
 from backend.api.categories import get_all_categories
 from backend.api.receipts import create_receipt, get_receipts_by_user, delete_receipt
 from backend.api.storage import upload_image, get_public_url, delete_image
 from services.ocr_pipeline.pipeline.run_pipeline import run_pipeline
-from services.ocr_pipeline.persistence.db_mapper import CATEGORY_MAP, PAYMENT_MAP
+from services.ocr_pipeline.persistence.db_mapper import CATEGORY_MAP
+from utils.config import DEFAULT_USER_ID
 
-# --- 1. Supabase 연동 로그인/회원가입 함수 ---
+# purchase_type UI 레이블 → DB 값 매핑
+PURCHASE_TYPE_OPTIONS = {
+    "없음": None,
+    "배달": "delivery",
+    "포장": "takeout",
+    "매장": "dine_in",
+    "직접 요리": "cooking",
+}
 
-def check_login(user_id: str, password: str) -> dict:
-    """
-    로그인 확인 - Supabase users 테이블 조회
-
-    Args:
-        user_id: 로그인 ID
-        password: 비밀번호
-
-    Returns:
-        dict: 로그인 성공 시 사용자 정보, 실패 시 None
-    """
-    try:
-        user = get_user_by_user_id(user_id)
-        if user and user.get("password") == password:
-            return user
-        return None
-    except Exception as e:
-        st.error(f"DB 연결 오류: {e}")
-        return None
-
-
-def register_user(user_id: str, password: str, name: str = None) -> bool:
-    """
-    회원가입 - Supabase users 테이블에 추가
-
-    Args:
-        user_id: 로그인 ID
-        password: 비밀번호
-        name: 사용자 이름 (선택, 없으면 user_id 사용)
-
-    Returns:
-        bool: 성공 여부
-    """
-    try:
-        # 이미 존재하는지 확인
-        existing = get_user_by_user_id(user_id)
-        if existing:
-            return False
-
-        # 새 사용자 생성
-        result = create_user(
-            name=name or user_id,
-            user_id=user_id,
-            password=password
-        )
-        return result is not None
-    except Exception as e:
-        st.error(f"회원가입 오류: {e}")
-        return False
-
-# --- 2. 페이지 설정 및 세션 상태 초기화 ---
+# --- 1. 페이지 설정 및 세션 상태 초기화 ---
 st.set_page_config(page_title="영수증 OCR 장부", layout="wide")
 
-if 'logged_in' not in st.session_state:
-    st.session_state['logged_in'] = False
-if 'user_id' not in st.session_state:
-    st.session_state['user_id'] = None
-if 'user_pk' not in st.session_state:
-    st.session_state['user_pk'] = None  # DB의 users.id (FK로 사용)
 if 'history' not in st.session_state:
     st.session_state['history'] = []
 
-# --- [로그아웃 처리 - localStorage 삭제] ---
-# 로그아웃 버튼 클릭 시 pending_logout 플래그가 설정되며,
-# 다음 렌더링에서 JS removeItem이 실행된 뒤 플래그를 해제한다.
-# (st.rerun() 직전에 JS를 호출하면 실행되기 전에 페이지가 리렌더링되어 무시되는 문제 방지)
-if st.session_state.get('pending_logout'):
-    streamlit_js_eval(js_expressions="localStorage.removeItem('ocr_user_id')", key="del_uid")
-    streamlit_js_eval(js_expressions="localStorage.removeItem('ocr_user_pk')", key="del_upk")
-    st.session_state['pending_logout'] = False
 
-# --- [localStorage에서 로그인 복원] ---
-# 새로고침 시 session_state는 초기화되지만 localStorage는 브라우저에 남아있으므로 자동 복원
-if not st.session_state['logged_in'] and not st.session_state.get('pending_logout'):
-    saved_user_id = streamlit_js_eval(js_expressions="localStorage.getItem('ocr_user_id')", key="restore_uid")
-    saved_user_pk = streamlit_js_eval(js_expressions="localStorage.getItem('ocr_user_pk')", key="restore_upk")
-    if saved_user_id and saved_user_pk and saved_user_id != "null":
-        st.session_state['logged_in'] = True
-        st.session_state['user_id'] = saved_user_id
-        st.session_state['user_pk'] = int(saved_user_pk)
-
-# --- 3. 로그인 / 회원가입 화면 (auth_page) ---
-def auth_page():
-    st.title("🔐 OCR 장부 시스템")
-    tab1, tab2 = st.tabs(["로그인", "회원가입"])
-    
-    with tab1:
-        st.subheader("로그인")
-        login_id = st.text_input("아이디", key="login_id")
-        login_pw = st.text_input("비밀번호", type="password", key="login_pw")
-        if st.button("로그인", use_container_width=True):
-            # Supabase users 테이블에서 확인
-            user = check_login(login_id, login_pw)
-            if user:
-                st.session_state['logged_in'] = True
-                st.session_state['user_id'] = login_id
-                st.session_state['user_pk'] = user.get("id")  # DB의 PK 저장 (영수증 저장 시 필요)
-                # localStorage에 로그인 정보 저장 (새로고침 시 유지)
-                streamlit_js_eval(js_expressions=f"localStorage.setItem('ocr_user_id', '{login_id}')", key="save_uid")
-                streamlit_js_eval(js_expressions=f"localStorage.setItem('ocr_user_pk', '{user.get('id')}')", key="save_upk")
-                st.success(f"{login_id}님 환영합니다!")
-                time.sleep(0.5)
-                st.rerun()
-            else:
-                st.error("아이디 또는 비밀번호가 잘못되었습니다.")
-                
-    with tab2:
-        st.subheader("새 계정 만들기")
-        new_id = st.text_input("사용할 아이디", key="new_id")
-        new_pw = st.text_input("사용할 비밀번호", type="password", key="new_pw")
-        confirm_pw = st.text_input("비밀번호 확인", type="password", key="confirm_pw")
-        
-        if st.button("회원가입 완료", use_container_width=True):
-            if not new_id or not new_pw:
-                st.warning("아이디와 비밀번호를 모두 입력해주세요.")
-            elif new_pw != confirm_pw:
-                st.error("비밀번호가 일치하지 않습니다.")
-            else:
-                # Supabase users 테이블에 추가
-                if register_user(new_id, new_pw):
-                    st.success("회원가입 성공! 로그인 탭에서 로그인해주세요.")
-                else:
-                    st.error("이미 존재하는 아이디입니다.")
-
-# --- 4. 메인 앱 화면 (main_app) - 사이드바 페이지 전환 허브 ---
+# --- 2. 메인 앱 화면 (main_app) - 사이드바 페이지 전환 허브 ---
 def main_app():
-    # --- [사용자 정보 및 로그아웃] ---
-    st.sidebar.write(f"👤 **{st.session_state['user_id']}**님 접속 중")
-    if st.sidebar.button("로그아웃"):
-        st.session_state['logged_in'] = False
-        st.session_state['user_id'] = None
-        st.session_state['user_pk'] = None
-        # 다음 렌더링에서 localStorage 삭제가 실행되도록 플래그 설정
-        st.session_state['pending_logout'] = True
-        st.rerun()
-
     # --- [사이드바 페이지 선택] ---
     st.sidebar.divider()
     page = st.sidebar.radio(
@@ -194,7 +72,7 @@ def main_app():
         page_analytics()
 
 
-# --- 4-1. 영수증 업로드 페이지 ---
+# --- 3. 영수증 업로드 페이지 ---
 def page_upload():
     category_names = list(st.session_state['categories'].keys())
 
@@ -251,7 +129,6 @@ def page_upload():
             except (ValueError, TypeError):
                 parsed_date = _date.today()
             parsed_category = ocr_data.get("category", "기타")
-            parsed_payment = ocr_data.get("payment", "")
             validation_status = ocr_data.get("validation_status", "error")
 
             with st.expander(f"📄 영수증 #{idx+1} : {file.name}", expanded=True):
@@ -283,18 +160,23 @@ def page_upload():
 
                     selected_cat_id = st.session_state['categories'].get(category)
 
+                    purchase_type_label = st.selectbox(
+                        "구매 방식",
+                        list(PURCHASE_TYPE_OPTIONS.keys()),
+                        key=f"pt_{idx}"
+                    )
+
                     # 스토리지 업로드를 위해 파일 바이너리와 content_type도 함께 저장
                     file_suffix = Path(file.name).suffix.lower()
                     content_type = "image/png" if file_suffix == ".png" else "image/jpeg"
 
                     temp_data_list.append({
                         "store_name": store_name,
-                        "date": date_val.strftime('%Y-%m-%d'),
+                        "paid_at": date_val.strftime('%Y-%m-%dT00:00:00+09:00'),
                         "total_amount": amount,
                         "category": category,
                         "category_id": selected_cat_id,
-                        "payment": parsed_payment,
-                        "payment_method_id": PAYMENT_MAP.get(parsed_payment),
+                        "purchase_type": PURCHASE_TYPE_OPTIONS[purchase_type_label],
                         "file_name": file.name,
                         "file_bytes": file.getvalue(),
                         "content_type": content_type,
@@ -313,9 +195,8 @@ def page_upload():
                 try:
                     # 1. Supabase Storage에 영수증 이미지 업로드
                     import time as _time
-                    user_pk = st.session_state['user_pk']
                     name_part, ext_part = os.path.splitext(data['file_name'])
-                    storage_path = f"user_{user_pk}/{name_part}_{int(_time.time())}{ext_part}"
+                    storage_path = f"user_{DEFAULT_USER_ID}/{name_part}_{int(_time.time())}{ext_part}"
                     upload_result = upload_image(
                         file_path=storage_path,
                         file_bytes=data["file_bytes"],
@@ -324,12 +205,12 @@ def page_upload():
 
                     # 2. DB에 영수증 정보 저장 (image_path = 스토리지 경로)
                     create_receipt(
-                        user_id=user_pk,
+                        user_id=DEFAULT_USER_ID,
                         category_id=data["category_id"],
-                        payment_method_id=data["payment_method_id"],
-                        date=data["date"],
+                        paid_at=data["paid_at"],
                         total_amount=data["total_amount"],
                         store_name=data["store_name"],
+                        purchase_type=data["purchase_type"],
                         image_path=upload_result["path"],
                     )
                     # 3. OCR 캐시의 image_path와 이벤트 로그도 스토리지 경로로 갱신
@@ -342,7 +223,7 @@ def page_upload():
 
                     success_count += 1
                     st.session_state['history'].append({
-                        "날짜": data["date"],
+                        "날짜": data["paid_at"][:10],
                         "상호명": data["store_name"],
                         "금액": data["total_amount"],
                         "카테고리": data["category"],
@@ -373,21 +254,16 @@ def page_upload():
         st.write("아직 저장된 내역이 없습니다. 영수증을 업로드해 보세요!")
 
 
-# --- 4-2. 지출 분석 페이지 ---
+# --- 4. 지출 분석 페이지 ---
 def page_analytics():
     import plotly.graph_objects as go
     from datetime import datetime
 
     st.title("📊 지출 분석 통계")
 
-    # DB에서 현재 로그인한 사용자의 영수증 데이터 조회
-    user_pk = st.session_state.get('user_pk')
-    if not user_pk:
-        st.warning("사용자 정보를 불러올 수 없습니다.")
-        return
-
+    # DB에서 영수증 데이터 조회
     try:
-        receipts = get_receipts_by_user(user_pk)
+        receipts = get_receipts_by_user(DEFAULT_USER_ID)
     except Exception as e:
         st.error(f"데이터 조회 실패: {e}")
         return
@@ -400,7 +276,7 @@ def page_analytics():
     cat_id_to_name = {v: k for k, v in st.session_state['categories'].items()}
 
     df = pd.DataFrame(receipts)
-    df['날짜'] = pd.to_datetime(df['date'])
+    df['날짜'] = pd.to_datetime(df['paid_at'])
     df['연월'] = df['날짜'].dt.strftime('%Y-%m')
     df['금액'] = df['total_amount']
     df['상호명'] = df['store_name']
@@ -616,7 +492,7 @@ def page_analytics():
     st.download_button(
         "📥 장부 다운로드",
         data=excel_buffer.getvalue(),
-        file_name=f"장부_{st.session_state['user_id']}.xlsx",
+        file_name="장부.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
@@ -745,9 +621,6 @@ def page_analytics():
                 st.session_state['receipt_page'] = current_page + 1
                 st.rerun()
 
-# --- 5. 실행 로직 (이 부분이 있어야 작동합니다!) ---
-if not st.session_state['logged_in']:
-    auth_page()
-else:
-    main_app()
-    
+
+# --- 5. 실행 로직 ---
+main_app()
