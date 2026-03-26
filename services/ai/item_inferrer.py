@@ -44,7 +44,7 @@ def infer_items(raw_text: str) -> list:
 
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
-        response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+        response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
         text = response.text.strip()
 
         # 코드블록 제거
