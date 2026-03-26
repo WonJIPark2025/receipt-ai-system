@@ -51,6 +51,7 @@ def run_pipeline(image_path: str, verbose: bool = True) -> dict:
 
         # Draft 생성
         draft = build_draft(image_path, parsed)
+        draft["raw_text"] = ocr_result.get("full_text", "")
         draft["events"] = logger.get_events()
 
         draft["validation_status"] = validation["validation_status"]

@@ -38,7 +38,7 @@ def analyze(year_month: str) -> str:
     Returns:
         str: Gemini 분석 결과 (마크다운)
     """
-    import google.generativeai as genai
+    from google import genai
 
     if not GEMINI_API_KEY:
         return "GEMINI_API_KEY가 설정되지 않았습니다."
@@ -97,7 +97,6 @@ def analyze(year_month: str) -> str:
 
 마크다운 형식으로 작성해주세요."""
 
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-2.5-flash")
-    response = model.generate_content(prompt)
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
     return response.text
