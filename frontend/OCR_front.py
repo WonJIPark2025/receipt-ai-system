@@ -25,9 +25,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from backend.api.categories import get_all_categories
 from backend.api.receipts import create_receipt, get_receipts_by_user, delete_receipt
+from backend.api.receipt_items import create_receipt_items
 from backend.api.storage import upload_image, get_public_url, delete_image
 from services.ocr_pipeline.pipeline.run_pipeline import run_pipeline
-from services.ocr_pipeline.persistence.db_mapper import CATEGORY_MAP
+from services.ocr_pipeline.persistence.db_mapper import _resolve_activity_tag
 from utils.config import DEFAULT_USER_ID
 
 # purchase_type UI 레이블 → DB 값 매핑
@@ -166,6 +167,27 @@ def page_upload():
                         key=f"pt_{idx}"
                     )
 
+                    memo = st.text_input("메모 (일기)", key=f"memo_{idx}")
+
+                    # 품목 확인 및 수정
+                    raw_items = ocr_data.get("items", [])
+                    if raw_items:
+                        items_df = pd.DataFrame([
+                            {"품목명": i.get("name", ""), "수량": i.get("quantity", 1), "단가": i.get("price", 0)}
+                            for i in raw_items
+                        ])
+                        edited_df = st.data_editor(
+                            items_df, key=f"items_{idx}",
+                            num_rows="dynamic", use_container_width=True
+                        )
+                        edited_items = [
+                            {"name": row["품목명"], "quantity": int(row["수량"]), "price": int(row["단가"])}
+                            for _, row in edited_df.iterrows()
+                            if row["품목명"]
+                        ]
+                    else:
+                        edited_items = []
+
                     # 스토리지 업로드를 위해 파일 바이너리와 content_type도 함께 저장
                     file_suffix = Path(file.name).suffix.lower()
                     content_type = "image/png" if file_suffix == ".png" else "image/jpeg"
@@ -177,6 +199,8 @@ def page_upload():
                         "category": category,
                         "category_id": selected_cat_id,
                         "purchase_type": PURCHASE_TYPE_OPTIONS[purchase_type_label],
+                        "memo": memo or None,
+                        "items": edited_items,
                         "file_name": file.name,
                         "file_bytes": file.getvalue(),
                         "content_type": content_type,
@@ -204,15 +228,30 @@ def page_upload():
                     )
 
                     # 2. DB에 영수증 정보 저장 (image_path = 스토리지 경로)
-                    create_receipt(
+                    receipt_result = create_receipt(
                         user_id=DEFAULT_USER_ID,
                         category_id=data["category_id"],
                         paid_at=data["paid_at"],
                         total_amount=data["total_amount"],
                         store_name=data["store_name"],
                         purchase_type=data["purchase_type"],
+                        memo=data["memo"],
                         image_path=upload_result["path"],
                     )
+
+                    # 3. 품목 저장 (activity_tag 자동 태깅)
+                    if receipt_result and data["items"]:
+                        items_payload = [
+                            {
+                                "name":         item.get("name", ""),
+                                "quantity":     item.get("quantity", 1),
+                                "price":        item.get("price"),
+                                "activity_tag": _resolve_activity_tag(item.get("name", "")),
+                            }
+                            for item in data["items"]
+                            if item.get("name")
+                        ]
+                        create_receipt_items(receipt_result["id"], items_payload)
                     # 3. OCR 캐시의 image_path와 이벤트 로그도 스토리지 경로로 갱신
                     ocr_cache = st.session_state['ocr_results'].get(data["file_name"])
                     if ocr_cache:
