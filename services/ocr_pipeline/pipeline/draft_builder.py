@@ -26,7 +26,6 @@ def build_draft(image_path: str, parsed: dict) -> dict:
         "store_name": parsed.get("store_name"),
         "transaction_date": parsed.get("transaction_date"),
         "total": parsed.get("total"),
-        "payment": parsed.get("payment"),
         "category": parsed.get("category"),
 
         # Items (현재 비활성 또는 빈 리스트 유지)
