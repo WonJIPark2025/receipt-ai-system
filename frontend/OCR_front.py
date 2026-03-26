@@ -33,7 +33,7 @@ from utils.config import DEFAULT_USER_ID
 
 # purchase_type UI 레이블 → DB 값 매핑
 PURCHASE_TYPE_OPTIONS = {
-    "없음": None,
+    "간편": "general",
     "배달": "delivery",
     "포장": "takeout",
     "매장": "dine_in",
@@ -123,12 +123,15 @@ def page_upload():
             parsed_date_str = ocr_data.get("transaction_date", "")
             parsed_total = ocr_data.get("total", 0)
 
-            # OCR 날짜 문자열 → date 객체 변환 (실패 시 오늘 날짜)
-            from datetime import date as _date
+            # OCR 날짜+시간 문자열 파싱
+            from datetime import date as _date, time as _time, datetime as _datetime
             try:
-                parsed_date = _date.fromisoformat(parsed_date_str)
+                parsed_dt = _datetime.fromisoformat(parsed_date_str)
+                parsed_date = parsed_dt.date()
+                parsed_time = parsed_dt.time()
             except (ValueError, TypeError):
                 parsed_date = _date.today()
+                parsed_time = _time(0, 0)
             parsed_category = ocr_data.get("category", "기타")
             validation_status = ocr_data.get("validation_status", "error")
 
@@ -149,6 +152,9 @@ def page_upload():
                     store_name = c1.text_input("상호명", value=parsed_store, key=f"store_{idx}")
                     date_val = c2.date_input("날짜", value=parsed_date, key=f"date_{idx}")
 
+                    c1b, c2b = st.columns(2)
+                    time_val = c1b.time_input("결제 시간", value=parsed_time, key=f"time_{idx}", step=60)
+
                     c3, c4 = st.columns(2)
                     amount = c3.number_input("금액", value=parsed_total, step=100, key=f"amt_{idx}")
 
@@ -162,31 +168,34 @@ def page_upload():
                     selected_cat_id = st.session_state['categories'].get(category)
 
                     purchase_type_label = st.selectbox(
-                        "구매 방식",
+                        "식사 방식",
                         list(PURCHASE_TYPE_OPTIONS.keys()),
                         key=f"pt_{idx}"
                     )
 
                     memo = st.text_input("메모 (일기)", key=f"memo_{idx}")
 
-                    # 품목 확인 및 수정
+                    # 품목 확인 및 수정 (항상 표시)
                     raw_items = ocr_data.get("items", [])
-                    if raw_items:
-                        items_df = pd.DataFrame([
-                            {"품목명": i.get("name", ""), "수량": i.get("quantity", 1), "단가": i.get("price", 0)}
-                            for i in raw_items
-                        ])
-                        edited_df = st.data_editor(
-                            items_df, key=f"items_{idx}",
-                            num_rows="dynamic", use_container_width=True
-                        )
-                        edited_items = [
-                            {"name": row["품목명"], "quantity": int(row["수량"]), "price": int(row["단가"])}
-                            for _, row in edited_df.iterrows()
-                            if row["품목명"]
-                        ]
-                    else:
-                        edited_items = []
+                    items_df = pd.DataFrame(
+                        [{"품목명": i.get("name", ""), "수량": i.get("quantity", 1), "단가": i.get("price", 0)}
+                         for i in raw_items]
+                        if raw_items else
+                        [{"품목명": "", "수량": 1, "단가": 0}]
+                    )
+                    edited_df = st.data_editor(
+                        items_df, key=f"items_{idx}",
+                        num_rows="dynamic", use_container_width=True
+                    )
+                    edited_items = [
+                        {
+                            "name":     row["품목명"],
+                            "quantity": int(row["수량"]) if pd.notna(row["수량"]) else 1,
+                            "price":    int(row["단가"]) if pd.notna(row["단가"]) else 0,
+                        }
+                        for _, row in edited_df.iterrows()
+                        if row["품목명"] and pd.notna(row["품목명"])
+                    ]
 
                     # 스토리지 업로드를 위해 파일 바이너리와 content_type도 함께 저장
                     file_suffix = Path(file.name).suffix.lower()
@@ -194,7 +203,7 @@ def page_upload():
 
                     temp_data_list.append({
                         "store_name": store_name,
-                        "paid_at": date_val.strftime('%Y-%m-%dT00:00:00+09:00'),
+                        "paid_at": f"{date_val.strftime('%Y-%m-%d')}T{time_val.strftime('%H:%M:%S')}+09:00",
                         "total_amount": amount,
                         "category": category,
                         "category_id": selected_cat_id,
@@ -394,11 +403,20 @@ def page_analytics():
         st.plotly_chart(fig, use_container_width=True)
 
     with v_col2:
-        # 선택된 연월의 카테고리 비중 파이 차트
-        cat_sum = df_filtered.groupby('카테고리')['금액'].sum().reset_index()
+        # 선택된 연월의 구매방식 비중 파이 차트
+        PURCHASE_TYPE_KO = {
+            "general":  "간편",
+            "delivery": "배달",
+            "takeout":  "포장",
+            "dine_in":  "매장",
+            "cooking":  "직접 요리",
+        }
+        df_filtered_pt = df_filtered.copy()
+        df_filtered_pt['구매방식'] = df_filtered_pt['purchase_type'].map(PURCHASE_TYPE_KO).fillna("간편")
+        pt_sum = df_filtered_pt.groupby('구매방식')['금액'].sum().reset_index()
         fig_pie = px.pie(
-            cat_sum, values='금액', names='카테고리',
-            title=f"{selected_month} 카테고리별 지출 비중", hole=0.4
+            pt_sum, values='금액', names='구매방식',
+            title=f"{selected_month} 식사방식별 지출 비중", hole=0.4
         )
         fig_pie.update_layout(height=400)
         st.plotly_chart(fig_pie, use_container_width=True)
@@ -415,41 +433,10 @@ def page_analytics():
         if st.button(f"🔍 {selected_month} AI 조언 받기", key="ai_advice_btn", type="primary"):
             with st.spinner("AI가 지출 내역을 분석하고 있습니다..."):
                 try:
-                    import google.generativeai as genai
-                    from utils.config import GEMINI_API_KEY
-                    import json as _json
-
-                    if not GEMINI_API_KEY:
-                        st.error("GEMINI_API_KEY가 .env에 설정되지 않았습니다.")
-                    else:
-                        genai.configure(api_key=GEMINI_API_KEY)
-                        model = genai.GenerativeModel("gemini-2.5-flash")
-
-                        advice_data = []
-                        for _, r in df_advice_month.iterrows():
-                            advice_data.append({
-                                "date": r['날짜'].strftime('%Y-%m-%d'),
-                                "store_name": r['상호명'],
-                                "total_amount": int(r['금액']),
-                                "category": r['카테고리']
-                            })
-
-                        prompt = f"""다음은 사용자의 {selected_month} 월 소비 데이터입니다.
-
-{_json.dumps(advice_data, ensure_ascii=False, indent=2)}
-
-다음 내용을 한국어로 간결하게 분석해주세요:
-
-1. 소비 패턴 요약
-2. 과소비 카테고리
-3. 절약을 위한 구체적 조언
-4. 한 줄 요약
-
-마크다운 형식으로 작성해주세요."""
-
-                        response = model.generate_content(prompt)
-                        st.session_state['ai_advice'] = response.text
-                        st.session_state['ai_advice_month'] = selected_month
+                    from services.ai.analyzer import analyze
+                    result_text = analyze(selected_month)
+                    st.session_state['ai_advice'] = result_text
+                    st.session_state['ai_advice_month'] = selected_month
                 except Exception as e:
                     st.error(f"AI 조언 생성 실패: {e}")
 
