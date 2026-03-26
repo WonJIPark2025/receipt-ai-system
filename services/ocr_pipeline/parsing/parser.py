@@ -6,8 +6,7 @@ parser.py - 영수증 텍스트 파싱
     - 가게명: 브랜드 사전 + 휴리스틱 점수 기반 탐색
     - 날짜: 정규식 패턴 매칭
     - 합계금액: 우선순위 키워드 + fallback 후보 수집
-    - 결제수단: 하단 15줄 기반 탐색 (페이/현금/카드)
-    - 카테고리: 가게명 → 품목 순서 사전 분류
+    - 카테고리: 식비 / 기타 2단계 분류 (v2 스키마 기준)
     - 품목: 단일 라인 및 분리된 라인 탐색 후 중복 제거
 """
 
@@ -137,46 +136,56 @@ def extract_store_name(lines):
 
 
 # --------------------------------------------------
-# 2️⃣ Date
+# 2️⃣ Datetime (paid_at — TIMESTAMPTZ)
 # --------------------------------------------------
 def extract_date(lines):
+    """
+    날짜+시간을 함께 파싱하여 ISO 8601 문자열 반환
+    시간 정보가 있으면 포함 → late_snack(22시 이후) 판정 가능
+    시간 없으면 날짜만 반환 (DB에서 00:00:00 으로 저장)
 
+    지원 포맷:
+        2024/03/15 21:47:32  →  2024-03-15T21:47:32
+        24/03/15 21:47       →  2024-03-15T21:47:00
+        2024-03-15           →  2024-03-15
+        20240315             →  2024-03-15
+    """
     full_text = "\n".join(lines)
 
-    patterns = [
-        r"(\d{4}|\d{2})[-./년\s]+(\d{1,2})[-./월\s]+(\d{1,2})",
-        r"(\d{4})(\d{2})(\d{2})"
+    # 1️⃣ 날짜 + 시간 패턴 (시간 포함 우선 탐색)
+    datetime_patterns = [
+        # 2024/03/15 21:47:32  or  24/03/15 21:47
+        r"(\d{4}|\d{2})[-./](\d{1,2})[-./](\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?",
+        # 승인일시 등 레이블 뒤에 붙는 경우
+        r"일시\s*[:：]?\s*(\d{4}|\d{2})[-./](\d{1,2})[-./](\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?",
     ]
 
-    for pattern in patterns:
+    for pattern in datetime_patterns:
         for m in re.finditer(pattern, full_text):
-            y, mth, d = m.groups()
+            groups = m.groups()
+            y, mth, d = groups[0], groups[1], groups[2]
+            hh, mm, ss = groups[3], groups[4], groups[5] if len(groups) > 5 else None
 
             if len(y) == 2:
                 y = "20" + y
 
             try:
-                dt = datetime(int(y), int(mth), int(d))
+                dt = datetime(
+                    int(y), int(mth), int(d),
+                    int(hh), int(mm), int(ss) if ss else 0
+                )
                 if 2010 <= dt.year <= 2030:
-                    return dt.strftime("%Y-%m-%d")
+                    return dt.strftime("%Y-%m-%dT%H:%M:%S")
             except ValueError:
                 continue
 
-    return ""
-
-# --------------------------------------------------
-# 2️⃣ Date
-# --------------------------------------------------
-def extract_date(lines):
-
-    full_text = "\n".join(lines)
-
-    patterns = [
+    # 2️⃣ 날짜만 패턴 (시간 없는 경우 fallback)
+    date_patterns = [
         r"(\d{4}|\d{2})[-./년\s]+(\d{1,2})[-./월\s]+(\d{1,2})",
-        r"(\d{4})(\d{2})(\d{2})"
+        r"(\d{4})(\d{2})(\d{2})",
     ]
 
-    for pattern in patterns:
+    for pattern in date_patterns:
         for m in re.finditer(pattern, full_text):
             y, mth, d = m.groups()
 
@@ -253,66 +262,18 @@ def extract_total(lines):
 
 
 # --------------------------------------------------
-# 2️⃣ Date
+# 5️⃣ Category (v2: 식비 / 기타 2단계)
 # --------------------------------------------------
-def extract_date(lines):
 
-    full_text = "\n".join(lines)
-
-    patterns = [
-        r"(\d{4}|\d{2})[-./년\s]+(\d{1,2})[-./월\s]+(\d{1,2})",
-        r"(\d{4})(\d{2})(\d{2})"
-    ]
-
-    for pattern in patterns:
-        for m in re.finditer(pattern, full_text):
-            y, mth, d = m.groups()
-
-            if len(y) == 2:
-                y = "20" + y
-
-            try:
-                dt = datetime(int(y), int(mth), int(d))
-                if 2010 <= dt.year <= 2030:
-                    return dt.strftime("%Y-%m-%d")
-            except ValueError:
-                continue
-
-    return ""
+# store_dict 의 세분류 중 식비(id=1) 로 묶이는 카테고리
+_FOOD_CATEGORIES = {"식비", "카페", "편의점"}
 
 
-# --------------------------------------------------
-# 4️⃣ Payment
-# --------------------------------------------------
-def extract_payment(lines):
-
-    # 하단 15줄만 탐색 (결제 영역)
-    target_lines = lines[-15:]
-
-    PAYMENT_PRIORITY = [
-        ("페이", "app"),
-        ("현금", "cash"),
-        ("카드", "card"),
-    ]
-
-    for keyword, label in PAYMENT_PRIORITY:
-        for text in target_lines:
-
-            # 환불 안내 문구 제외
-            if "환불" in text or "지참" in text or "영수증" in text:
-                continue
-
-            if keyword in text:
-                return label
-
-    return ""
-
-
-# --------------------------------------------------
-# 5️⃣ Category
-# --------------------------------------------------
 def classify_category(store_name, full_text):
-
+    """
+    가게명 → 품목 순서로 탐색하여 식비 / 기타 반환
+    db_mapper.CATEGORY_MAP 에서 id 로 변환됨
+    """
     store_upper = store_name.upper()
     text_upper = full_text.upper()
 
@@ -320,13 +281,12 @@ def classify_category(store_name, full_text):
     for category, keywords in STORE_CATEGORY_RULES.items():
         for kw in keywords:
             if kw.upper() in store_upper:
-                return category
+                return "식비" if category in _FOOD_CATEGORIES else "기타"
 
-    # 2️⃣ 품목 기반 분류
-    for category, keywords in ITEM_CATEGORY_RULES.items():
-        for kw in keywords:
-            if kw.upper() in text_upper:
-                return category
+    # 2️⃣ 품목 기반 분류 (식비 키워드만 탐색)
+    for kw in ITEM_CATEGORY_RULES.get("식비", []):
+        if kw.upper() in text_upper:
+            return "식비"
 
     return "기타"
 
@@ -402,10 +362,10 @@ def extract_items(lines):
         normalized = normalize_item(name)
 
         items.append({
-            "name": name,          
-            "normalized": normalized, 
+            "name": name,
+            "normalized": normalized,
             "price": price,
-            "qty": 1,
+            "quantity": 1,
             "line_text": text
         })
 
@@ -444,7 +404,7 @@ def extract_items(lines):
         items.append({
             "name": name,
             "price": price,
-            "qty": 1,
+            "quantity": 1,
             "line_text": item_line + " | " + price_line
         })
 
@@ -500,14 +460,13 @@ def normalize_item(name):
 def parse_text(ocr_result: dict) -> dict:
 
     lines = [l.strip() for l in ocr_result["full_text"].split("\n") if l.strip()]
+    full_text = ocr_result["full_text"]
 
     store = extract_store_name(lines)
     date = extract_date(lines)
     total = extract_total(lines)
-    payment = extract_payment(lines)
-    category = classify_category(store, ocr_result["full_text"])
+    category = classify_category(store, full_text)
     items = extract_items(lines)
-    full_text = ocr_result["full_text"]
 
     # 배달/포장 fallback
     if (not store or len(store) < 2) and (
@@ -522,7 +481,6 @@ def parse_text(ocr_result: dict) -> dict:
         "store_name": store,
         "transaction_date": date,
         "total": total,
-        "payment": payment,
-        "category": category,
+        "category": category,   # "식비" | "기타"  → db_mapper 에서 id 변환
         "items": items
     }
