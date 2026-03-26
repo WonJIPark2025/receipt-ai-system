@@ -26,6 +26,7 @@ def create_receipt(
     purchase_type: str = None,
     memo: str = None,
     image_path: str = None,
+    raw_text: str = None,
 ) -> dict:
     """
     새 영수증 생성
@@ -63,6 +64,7 @@ def create_receipt(
         "purchase_type": purchase_type,
         "memo":          memo,
         "image_path":    image_path,
+        "raw_text":      raw_text,
     }
     result = client.table(TABLE_RECEIPTS).insert(data).execute()
     return result.data[0] if result.data else None

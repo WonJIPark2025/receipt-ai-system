@@ -135,25 +135,17 @@ def page_upload():
             parsed_category = ocr_data.get("category", "기타")
             validation_status = ocr_data.get("validation_status", "error")
 
-            # LLM 추론 사전 실행 (expander 바깥에서 캐싱 — 블로킹 방지)
+            # LLM 통합 추론 — 1회 호출로 식사 방식 + 품목 동시 추출 (캐싱)
             raw_text_for_llm = ocr_data.get("raw_text", "")
-
-            infer_cache_key = f"pt_inferred_{file.name}"
+            infer_cache_key = f"inferred_{file.name}"
             if infer_cache_key not in st.session_state:
-                from services.ai.purchase_type_inferrer import infer_purchase_type
-                st.session_state[infer_cache_key] = infer_purchase_type(
-                    raw_text=raw_text_for_llm,
-                    items=ocr_data.get("items", []),
-                )
-            inferred_pt = st.session_state[infer_cache_key]
-            PT_DB_TO_LABEL = {v: k for k, v in PURCHASE_TYPE_OPTIONS.items()}
-            inferred_label = PT_DB_TO_LABEL.get(inferred_pt, "간편")
+                from services.ai.receipt_inferrer import infer_receipt_fields
+                st.session_state[infer_cache_key] = infer_receipt_fields(raw_text_for_llm)
+            inferred = st.session_state[infer_cache_key]
 
-            items_cache_key = f"items_inferred_{file.name}"
-            if items_cache_key not in st.session_state:
-                from services.ai.item_inferrer import infer_items
-                st.session_state[items_cache_key] = infer_items(raw_text_for_llm)
-            inferred_items = st.session_state[items_cache_key]
+            PT_DB_TO_LABEL = {v: k for k, v in PURCHASE_TYPE_OPTIONS.items()}
+            inferred_label = PT_DB_TO_LABEL.get(inferred["purchase_type"], "간편")
+            inferred_items = inferred["items"]
 
             with st.expander(f"📄 영수증 #{idx+1} : {file.name}", expanded=True):
                 col_img, col_form = st.columns([1, 2])
@@ -200,7 +192,7 @@ def page_upload():
 
                     # 품목 확인 및 수정 (항상 LLM 추출 — 사전 캐싱된 결과 사용)
                     raw_items = inferred_items
-                    st.caption(f"품목 출처: 😉🆗 LLM ({len(raw_items)}건)")
+                    st.caption(f"품목 출처: LLM ({len(raw_items)}건)")
 
                     items_df = pd.DataFrame(
                         [{"품목명": i.get("name", ""), "수량": i.get("quantity", 1), "단가": i.get("price", 0)}
@@ -234,6 +226,7 @@ def page_upload():
                         "category_id": selected_cat_id,
                         "purchase_type": PURCHASE_TYPE_OPTIONS[purchase_type_label],
                         "memo": memo or None,
+                        "raw_text": ocr_data.get("raw_text", ""),
                         "items": edited_items,
                         "file_name": file.name,
                         "file_bytes": file.getvalue(),
@@ -271,9 +264,18 @@ def page_upload():
                         purchase_type=data["purchase_type"],
                         memo=data["memo"],
                         image_path=upload_result["path"],
+                        raw_text=data["raw_text"],
                     )
 
-                    # 3. 품목 저장 (activity_tag 자동 태깅)
+                    # 3. 임베딩 생성 및 저장 (RAG 기반)
+                    if receipt_result and data["raw_text"]:
+                        from services.ai.embedder import embed_text
+                        from backend.api.receipt_embeddings import save_embedding
+                        embedding = embed_text(data["raw_text"])
+                        if embedding:
+                            save_embedding(receipt_result["id"], data["raw_text"], embedding)
+
+                    # 4. 품목 저장 (activity_tag 자동 태깅)
                     if receipt_result and data["items"]:
                         items_payload = [
                             {
@@ -310,7 +312,7 @@ def page_upload():
                 st.success(f"✅ {success_count}건 저장 완료!" + (f" ({fail_count}건 실패)" if fail_count else ""))
             st.session_state['ocr_results'] = {}
             for key in list(st.session_state.keys()):
-                if key.startswith("pt_inferred_") or key.startswith("items_inferred_"):
+                if key.startswith("inferred_"):
                     del st.session_state[key]
             time.sleep(1)
             st.rerun()
