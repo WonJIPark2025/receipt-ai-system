@@ -48,6 +48,14 @@ SUPABASE_BUCKET = _get_config("SUPABASE_BUCKET", "OcrReceipts")
 GEMINI_API_KEY = _get_config("GEMINI_API_KEY")
 
 
+# =============================================================================
+# 앱 설정
+# =============================================================================
+# 단일 사용자 앱 — auth 없이 고정 user_id 사용
+
+DEFAULT_USER_ID = 1
+
+
 def check_env():
     """
     환경변수가 제대로 설정되었는지 확인
