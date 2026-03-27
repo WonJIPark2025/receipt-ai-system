@@ -137,9 +137,11 @@ def page_upload():
             parsed_category = ocr_data.get("category", "기타")
             validation_status = ocr_data.get("validation_status", "error")
 
+            # Gemini가 purchase_type / items 를 이미 추출
+            inferred_pt = ocr_data.get("purchase_type", "general")
             PT_DB_TO_LABEL = {v: k for k, v in PURCHASE_TYPE_OPTIONS.items()}
-            inferred_label = PT_DB_TO_LABEL.get(ocr_data.get("purchase_type", "general"), "간편")
-            inferred_items = ocr_data.get("inferred_items", [])
+            inferred_label = PT_DB_TO_LABEL.get(inferred_pt, "간편")
+            inferred_items = ocr_data.get("items", [])
 
             with st.expander(f"📄 영수증 #{idx+1} : {file.name}", expanded=True):
                 col_img, col_form = st.columns([1, 2])
