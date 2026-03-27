@@ -1,15 +1,15 @@
 """
-OCR_mobile.py - 모바일 전용 UI
+receipt_mobile.py - 모바일 전용 UI
 
 담당: 프론트엔드
-설명: 모바일 기기에 최적화된 영수증 OCR 시스템 UI
+설명: 모바일 기기에 최적화된 영수증 AI 장부 UI
     - app.py에서 모바일 감지 시 이 파일로 분기
-    - OCR_front.py와 동일한 기능을 모바일 레이아웃으로 제공
+    - receipt_front.py와 동일한 기능을 모바일 레이아웃으로 제공
     - 세로 1컬럼 레이아웃, 터치 친화적 구성
     - 사이드바 없음 → 상단 탭 메뉴로 대체
 포함 기능:
     - Supabase 로그인/회원가입 + localStorage 로그인 유지
-    - OCR 파이프라인 영수증 인식 + DB/Storage 저장
+    - Gemini 영수증 분석 + DB/Storage 저장
     - 지출 분석 (연월 선택, 막대/선 그래프, 파이 차트)
     - AI 월별 조언 (Gemini)
 #       - 영수증 내역 페이지네이션 + 이미지 보기
@@ -32,8 +32,8 @@ from backend.api.users import get_user_by_user_id, create_user
 from backend.api.categories import get_all_categories
 from backend.api.receipts import create_receipt, get_receipts_by_user, delete_receipt
 from backend.api.storage import upload_image, get_public_url, delete_image
-from services.ocr_pipeline.pipeline.run_pipeline import run_pipeline
-from services.ocr_pipeline.persistence.db_mapper import CATEGORY_MAP, PAYMENT_MAP
+from services.ai.gemini import extract_receipt_data
+from services.ai.validator import validate_receipt
 
 
 # =============================================================================
@@ -107,7 +107,7 @@ def register_user(user_id: str, password: str, name: str = None) -> bool:
 # =============================================================================
 # 3. 세션 상태 초기화
 # =============================================================================
-st.set_page_config(page_title="영수증 OCR 장부", layout="centered")
+st.set_page_config(page_title="영수증 AI 장부", layout="centered")
 
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
@@ -120,14 +120,14 @@ if 'history' not in st.session_state:
 
 # --- [로그아웃 처리 - localStorage 삭제] ---
 if st.session_state.get('pending_logout'):
-    streamlit_js_eval(js_expressions="localStorage.removeItem('ocr_user_id')", key="m_del_uid")
-    streamlit_js_eval(js_expressions="localStorage.removeItem('ocr_user_pk')", key="m_del_upk")
+    streamlit_js_eval(js_expressions="localStorage.removeItem('receipt_user_id')", key="m_del_uid")
+    streamlit_js_eval(js_expressions="localStorage.removeItem('receipt_user_pk')", key="m_del_upk")
     st.session_state['pending_logout'] = False
 
 # --- [localStorage에서 로그인 복원] ---
 if not st.session_state['logged_in'] and not st.session_state.get('pending_logout'):
-    saved_user_id = streamlit_js_eval(js_expressions="localStorage.getItem('ocr_user_id')", key="m_restore_uid")
-    saved_user_pk = streamlit_js_eval(js_expressions="localStorage.getItem('ocr_user_pk')", key="m_restore_upk")
+    saved_user_id = streamlit_js_eval(js_expressions="localStorage.getItem('receipt_user_id')", key="m_restore_uid")
+    saved_user_pk = streamlit_js_eval(js_expressions="localStorage.getItem('receipt_user_pk')", key="m_restore_upk")
     if saved_user_id and saved_user_pk and saved_user_id != "null":
         st.session_state['logged_in'] = True
         st.session_state['user_id'] = saved_user_id
@@ -138,7 +138,7 @@ if not st.session_state['logged_in'] and not st.session_state.get('pending_logou
 # 4. 모바일 로그인 / 회원가입 화면
 # =============================================================================
 def auth_page():
-    st.markdown("<h2 style='text-align: center;'>🔐 OCR 장부</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 style='text-align: center;'>🔐 AI 장부</h2>", unsafe_allow_html=True)
     st.markdown("---")
 
     tab1, tab2 = st.tabs(["로그인", "회원가입"])
@@ -153,8 +153,8 @@ def auth_page():
                 st.session_state['logged_in'] = True
                 st.session_state['user_id'] = login_id
                 st.session_state['user_pk'] = user.get("id")
-                streamlit_js_eval(js_expressions=f"localStorage.setItem('ocr_user_id', '{login_id}')", key="m_save_uid")
-                streamlit_js_eval(js_expressions=f"localStorage.setItem('ocr_user_pk', '{user.get('id')}')", key="m_save_upk")
+                streamlit_js_eval(js_expressions=f"localStorage.setItem('receipt_user_id', '{login_id}')", key="m_save_uid")
+                streamlit_js_eval(js_expressions=f"localStorage.setItem('receipt_user_pk', '{user.get('id')}')", key="m_save_upk")
                 st.success(f"{login_id}님 환영합니다!")
                 time.sleep(0.5)
                 st.rerun()
@@ -218,7 +218,7 @@ def main_app():
 def page_upload():
     category_names = list(st.session_state['categories'].keys())
 
-    st.markdown("### 🧾 영수증 OCR 장부")
+    st.markdown("### 🧾 영수증 AI 장부")
     st.info("영수증 사진을 업로드하면 AI가 자동으로 내용을 인식합니다.")
 
     # --- 파일 업로드 ---
@@ -229,20 +229,22 @@ def page_upload():
         key="m_uploader"
     )
 
-    # --- OCR 파이프라인 실행 ---
+    # --- Gemini 분석 실행 ---
     if 'ocr_results' not in st.session_state:
         st.session_state['ocr_results'] = {}
 
     if uploaded_files:
         for file in uploaded_files:
             if file.name not in st.session_state['ocr_results']:
-                with st.spinner(f"🔍 {file.name} OCR 처리 중..."):
+                with st.spinner(f"🔍 {file.name} 분석 중..."):
                     try:
                         suffix = Path(file.name).suffix
                         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
                         tmp.write(file.getbuffer())
                         tmp.close()
-                        result = run_pipeline(tmp.name, verbose=False)
+                        data = extract_receipt_data(tmp.name)
+                        validation = validate_receipt(data)
+                        result = {**data, **validation}
                         st.session_state['ocr_results'][file.name] = result
                         os.unlink(tmp.name)
                     except Exception as e:
@@ -260,16 +262,15 @@ def page_upload():
             ocr_data = st.session_state['ocr_results'].get(file.name, {})
 
             parsed_store = ocr_data.get("store_name", "")
-            parsed_date_str = ocr_data.get("transaction_date", "")
+            parsed_date_str = ocr_data.get("date", "")
             parsed_total = ocr_data.get("total", 0)
 
             from datetime import date as _date
             try:
-                parsed_date = _date.fromisoformat(parsed_date_str)
+                parsed_date = _date.fromisoformat(parsed_date_str[:10])
             except (ValueError, TypeError):
                 parsed_date = _date.today()
             parsed_category = ocr_data.get("category", "기타")
-            parsed_payment = ocr_data.get("payment", "")
             validation_status = ocr_data.get("validation_status", "error")
 
             with st.expander(f"📄 #{idx+1} {file.name}", expanded=(idx == 0)):
@@ -277,11 +278,11 @@ def page_upload():
                 st.image(file, use_column_width=True)
 
                 if validation_status == "success":
-                    st.success("✅ OCR 인식 성공")
+                    st.success("✅ AI 분석 성공")
                 elif validation_status == "review_required":
                     st.warning("⚠️ 검토 필요")
                 else:
-                    st.error("❌ OCR 인식 실패")
+                    st.error("❌ AI 분석 실패")
 
                 store_name = st.text_input("상호명", value=parsed_store, key=f"m_store_{idx}")
                 date_val = st.date_input("날짜", value=parsed_date, key=f"m_date_{idx}")
@@ -305,8 +306,6 @@ def page_upload():
                     "total_amount": amount,
                     "category": category,
                     "category_id": selected_cat_id,
-                    "payment": parsed_payment,
-                    "payment_method_id": PAYMENT_MAP.get(parsed_payment),
                     "file_name": file.name,
                     "file_bytes": file.getvalue(),
                     "content_type": content_type,
@@ -335,7 +334,6 @@ def page_upload():
                     create_receipt(
                         user_id=user_pk,
                         category_id=data["category_id"],
-                        payment_method_id=data["payment_method_id"],
                         date=data["date"],
                         total_amount=data["total_amount"],
                         store_name=data["store_name"],

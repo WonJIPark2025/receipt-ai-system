@@ -45,23 +45,3 @@ def get_client() -> Client:
     return supabase
 
 
-def test_connection() -> bool:
-    """
-    Supabase 연결 테스트
-
-    Returns:
-        bool: 연결 성공 여부
-
-    사용 예시:
-        from backend.database import test_connection
-        if test_connection():
-            print("연결 성공!")
-    """
-    try:
-        client = get_client()
-        # 간단한 쿼리로 연결 확인
-        client.table("categories").select("id").limit(1).execute()
-        return True
-    except Exception as e:
-        print(f"❌ 연결 실패: {e}")
-        return False

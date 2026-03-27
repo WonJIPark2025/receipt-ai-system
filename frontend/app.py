@@ -4,8 +4,8 @@ app.py - Streamlit 메인 진입점 (디바이스 분기)
 담당: 프론트엔드
 실행: streamlit run frontend/app.py
 설명: 접속 기기를 감지하여 적절한 UI로 분기
-    - 데스크톱/노트북 → OCR_front.py (wide 레이아웃)
-    - 모바일 기기     → OCR_mobile.py (centered 레이아웃)
+    - 데스크톱/노트북 → receipt_front.py (wide 레이아웃)
+    - 모바일 기기     → receipt_mobile.py (centered 레이아웃)
 동작 원리:
     1. streamlit_js_eval로 브라우저 화면 너비를 가져옴
     2. 화면 너비 768px 이하 → 모바일로 판단
@@ -26,7 +26,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # 1. 페이지 기본 설정
 # =============================================================================
 st.set_page_config(
-    page_title="영수증 OCR 장부",
+    page_title="영수증 AI 장부",
     page_icon="🧾",
     layout="centered"
 )
@@ -60,11 +60,11 @@ is_mobile = screen_width <= 768
 # 3. 디바이스별 분기 실행
 # =============================================================================
 # 감지된 디바이스 타입에 따라 해당 UI 파일을 로드
-# - 모바일 (768px 이하) → OCR_mobile.py 실행
-# - 데스크톱 (768px 초과) → OCR_front.py 실행
+# - 모바일 (768px 이하) → receipt_mobile.py 실행
+# - 데스크톱 (768px 초과) → receipt_front.py 실행
 #
 # load_page():
-#   OCR_front.py / OCR_mobile.py 안에 있는 st.set_page_config() 호출을
+#   receipt_front.py / receipt_mobile.py 안에 있는 st.set_page_config() 호출을
 #   건너뛰어 중복 호출 에러를 방지함 (app.py에서 이미 호출했으므로)
 # =============================================================================
 
@@ -86,7 +86,7 @@ def load_page(file_path: Path):
 
 if is_mobile:
     # --- 모바일 UI 로드 ---
-    load_page(frontend_dir / "OCR_mobile.py")
+    load_page(frontend_dir / "receipt_mobile.py")
 else:
     # --- 데스크톱 UI 로드 ---
-    load_page(frontend_dir / "OCR_front.py")
+    load_page(frontend_dir / "receipt_front.py")
