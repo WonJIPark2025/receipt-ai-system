@@ -1,27 +1,30 @@
 """
-validator.py - 파싱 결과 검증
+validator.py - 영수증 데이터 검증
 
-담당: OCR
-설명: 파싱된 영수증 데이터의 유효성 자동 검증
+담당: AI
+설명: 추출된 영수증 데이터의 유효성 검증
     - 필수값(가게명, 합계, 날짜) 누락 여부 확인
     - 판정: success / review_required / error
-    - 오류 이슈 목록(issues) 함께 반환
 """
 
-def validate_receipt(parsed: dict) -> dict:
-    """
-    파싱 결과 자동 검증
-    success / review_required / error 판정
-    """
 
+def validate_receipt(data: dict) -> dict:
+    """
+    추출 결과 자동 검증
+
+    Returns:
+        dict: {
+            "validation_status": "success" | "review_required" | "error",
+            "issues": list[str]
+        }
+    """
     issues = []
 
-    store = parsed.get("store_name", "")
-    total = parsed.get("total", 0)
-    date = parsed.get("transaction_date", "")
-    category = parsed.get("category", "기타")
+    store = data.get("store_name", "")
+    total = data.get("total", 0)
+    date  = data.get("date", "")
+    category = data.get("category", "기타")
 
-    # 1️⃣ 필수값 검사
     if not store or len(store) < 2:
         issues.append("store_name_invalid")
 
@@ -31,11 +34,9 @@ def validate_receipt(parsed: dict) -> dict:
     if not date:
         issues.append("date_missing")
 
-    # 2️⃣ 의심 케이스
     if category == "기타":
         issues.append("category_uncertain")
 
-    # 판정
     if "total_invalid" in issues or "store_name_invalid" in issues:
         status = "error"
     elif issues:
@@ -45,5 +46,5 @@ def validate_receipt(parsed: dict) -> dict:
 
     return {
         "validation_status": status,
-        "issues": issues
+        "issues": issues,
     }

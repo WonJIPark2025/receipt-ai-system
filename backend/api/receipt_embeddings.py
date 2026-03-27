@@ -19,7 +19,7 @@ def save_embedding(receipt_id: int, raw_text: str, embedding: list[float]) -> di
 
     Args:
         receipt_id : receipts 테이블 FK
-        raw_text   : OCR 원문
+        raw_text   : 영수증 원문 텍스트
         embedding  : 768차원 벡터
 
     Returns:

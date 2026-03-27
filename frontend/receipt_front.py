@@ -1,12 +1,12 @@
 """
-OCR_front.py - 데스크톱 전용 UI
+receipt_front.py - 데스크톱 전용 UI
 
 담당: 프론트엔드
-설명: 데스크톱/노트북에 최적화된 영수증 OCR 시스템 UI
+설명: 데스크톱/노트북에 최적화된 영수증 AI 장부 UI
     - app.py에서 데스크톱 감지 시 이 파일로 분기
     - wide 레이아웃, 사이드바 메뉴 구성
 포함 기능:
-    - OCR 파이프라인 영수증 인식 + DB/Storage 저장
+    - Gemini 영수증 분석 + DB/Storage 저장
     - 지출 분석 (연월 선택, 막대/선 그래프, 파이 차트)
     - AI 월별 조언 (Gemini)
     - 장부 다운로드 (Excel)
@@ -27,8 +27,8 @@ from backend.api.categories import get_all_categories
 from backend.api.receipts import create_receipt, get_receipts_by_user, delete_receipt
 from backend.api.receipt_items import create_receipt_items
 from backend.api.storage import upload_image, get_public_url, delete_image
-from services.ocr_pipeline.pipeline.run_pipeline import run_pipeline
-from services.ocr_pipeline.persistence.db_mapper import _resolve_activity_tag
+from services.ai.gemini import extract_receipt_data, resolve_activity_tag
+from services.ai.validator import validate_receipt
 from utils.config import DEFAULT_USER_ID
 
 # purchase_type UI 레이블 → DB 값 매핑
@@ -41,7 +41,7 @@ PURCHASE_TYPE_OPTIONS = {
 }
 
 # --- 1. 페이지 설정 및 세션 상태 초기화 ---
-st.set_page_config(page_title="영수증 OCR 장부", layout="wide")
+st.set_page_config(page_title="영수증 AI 장부", layout="wide")
 
 if 'history' not in st.session_state:
     st.session_state['history'] = []
@@ -77,7 +77,7 @@ def main_app():
 def page_upload():
     category_names = list(st.session_state['categories'].keys())
 
-    st.title("🧾 영수증 OCR 자동 장부 시스템")
+    st.title("🧾 영수증 AI 장부 시스템")
     st.info("여러 장의 영수증을 한 번에 업로드하고 내용을 확인한 뒤 저장하세요.")
 
     # --- [1. 파일 업로드 섹션] ---
@@ -87,21 +87,23 @@ def page_upload():
         accept_multiple_files=True
     )
 
-    # --- [OCR 파이프라인 실행 - 업로드된 파일별로 결과를 세션에 캐싱] ---
+    # --- [Gemini 분석 - 업로드된 파일별로 결과를 세션에 캐싱] ---
     if 'ocr_results' not in st.session_state:
         st.session_state['ocr_results'] = {}
 
     if uploaded_files:
         for file in uploaded_files:
             if file.name not in st.session_state['ocr_results']:
-                with st.spinner(f"🔍 {file.name} OCR 처리 중..."):
+                with st.spinner(f"🔍 {file.name} 분석 중..."):
                     try:
                         suffix = Path(file.name).suffix
                         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
                         tmp.write(file.getbuffer())
                         tmp.close()
 
-                        result = run_pipeline(tmp.name, verbose=False)
+                        data = extract_receipt_data(tmp.name)
+                        validation = validate_receipt(data)
+                        result = {**data, **validation}
                         st.session_state['ocr_results'][file.name] = result
 
                         os.unlink(tmp.name)
@@ -120,10 +122,10 @@ def page_upload():
             ocr_data = st.session_state['ocr_results'].get(file.name, {})
 
             parsed_store = ocr_data.get("store_name", "")
-            parsed_date_str = ocr_data.get("transaction_date", "")
+            parsed_date_str = ocr_data.get("date", "")
             parsed_total = ocr_data.get("total", 0)
 
-            # OCR 날짜+시간 문자열 파싱
+            # 날짜+시간 문자열 파싱
             from datetime import date as _date, time as _time, datetime as _datetime
             try:
                 parsed_dt = _datetime.fromisoformat(parsed_date_str)
@@ -135,17 +137,9 @@ def page_upload():
             parsed_category = ocr_data.get("category", "기타")
             validation_status = ocr_data.get("validation_status", "error")
 
-            # LLM 통합 추론 — 1회 호출로 식사 방식 + 품목 동시 추출 (캐싱)
-            raw_text_for_llm = ocr_data.get("raw_text", "")
-            infer_cache_key = f"inferred_{file.name}"
-            if infer_cache_key not in st.session_state:
-                from services.ai.receipt_inferrer import infer_receipt_fields
-                st.session_state[infer_cache_key] = infer_receipt_fields(raw_text_for_llm)
-            inferred = st.session_state[infer_cache_key]
-
             PT_DB_TO_LABEL = {v: k for k, v in PURCHASE_TYPE_OPTIONS.items()}
-            inferred_label = PT_DB_TO_LABEL.get(inferred["purchase_type"], "간편")
-            inferred_items = inferred["items"]
+            inferred_label = PT_DB_TO_LABEL.get(ocr_data.get("purchase_type", "general"), "간편")
+            inferred_items = ocr_data.get("inferred_items", [])
 
             with st.expander(f"📄 영수증 #{idx+1} : {file.name}", expanded=True):
                 col_img, col_form = st.columns([1, 2])
@@ -153,11 +147,11 @@ def page_upload():
                 with col_img:
                     st.image(file, use_column_width=True)
                     if validation_status == "success":
-                        st.success("✅ OCR 인식 성공")
+                        st.success("✅ AI 분석 성공")
                     elif validation_status == "review_required":
                         st.warning("⚠️ 검토 필요")
                     else:
-                        st.error("❌ OCR 인식 실패")
+                        st.error("❌ AI 분석 실패")
 
                 with col_form:
                     c1, c2 = st.columns(2)
@@ -190,9 +184,9 @@ def page_upload():
 
                     memo = st.text_input("메모 (일기)", key=f"memo_{idx}")
 
-                    # 품목 확인 및 수정 (항상 LLM 추출 — 사전 캐싱된 결과 사용)
+                    # 품목 확인 및 수정 (Gemini 추출 결과)
                     raw_items = inferred_items
-                    st.caption(f"품목 출처: LLM ({len(raw_items)}건)")
+                    st.caption(f"품목 출처: Gemini ({len(raw_items)}건)")
 
                     items_df = pd.DataFrame(
                         [{"품목명": i.get("name", ""), "수량": i.get("quantity", 1), "단가": i.get("price", 0)}
@@ -282,13 +276,13 @@ def page_upload():
                                 "name":         item.get("name", ""),
                                 "quantity":     item.get("quantity", 1),
                                 "price":        item.get("price"),
-                                "activity_tag": _resolve_activity_tag(item.get("name", "")),
+                                "activity_tag": resolve_activity_tag(item.get("name", "")),
                             }
                             for item in data["items"]
                             if item.get("name")
                         ]
                         create_receipt_items(receipt_result["id"], items_payload)
-                    # 3. OCR 캐시의 image_path와 이벤트 로그도 스토리지 경로로 갱신
+                    # 3. 캐시의 image_path를 스토리지 경로로 갱신
                     ocr_cache = st.session_state['ocr_results'].get(data["file_name"])
                     if ocr_cache:
                         ocr_cache["image_path"] = upload_result["path"]
@@ -311,9 +305,6 @@ def page_upload():
                 st.balloons()
                 st.success(f"✅ {success_count}건 저장 완료!" + (f" ({fail_count}건 실패)" if fail_count else ""))
             st.session_state['ocr_results'] = {}
-            for key in list(st.session_state.keys()):
-                if key.startswith("inferred_"):
-                    del st.session_state[key]
             time.sleep(1)
             st.rerun()
 
