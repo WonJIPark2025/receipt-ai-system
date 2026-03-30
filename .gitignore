@@ -183,6 +183,9 @@ data/receipts/*
 !data/receipts/.gitkeep
 data/*.db
 
+# 로컬 전용 스크립트 (데모 시드 등)
+scripts/
+
 # Abstra
 # Abstra is an AI-powered process automation framework.
 # Ignore directories containing user credentials, local state, and settings.

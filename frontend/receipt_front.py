@@ -29,7 +29,7 @@ from backend.api.receipt_items import create_receipt_items
 from backend.api.storage import upload_image, get_public_url, delete_image
 from services.ai.gemini import extract_receipt_data, resolve_activity_tag
 from services.ai.validator import validate_receipt
-from utils.config import DEFAULT_USER_ID
+from utils.config import DEFAULT_USER_ID, DEMO_MODE
 
 
 # --- 1. 페이지 설정 및 세션 상태 초기화 ---
@@ -75,6 +75,8 @@ def main_app():
 # --- 3. 영수증 업로드 페이지 ---
 def page_upload():
     st.title("🧾 영수증 AI 장부 정리")
+    if DEMO_MODE:
+        st.info("👀 데모 모드 — 읽기 전용입니다. 업로드 및 저장 기능은 비활성화되어 있습니다.")
 
     import io as _io
     from datetime import datetime as _dt
@@ -125,19 +127,22 @@ def page_upload():
             with st.container(height=420, border=True):
                 if fd is None:
                     st.markdown("<div style='height:120px'></div>", unsafe_allow_html=True)
-                    raw_files = st.file_uploader(
-                        "영수증 이미지 업로드",
-                        type=['jpg', 'jpeg', 'png'],
-                        accept_multiple_files=True,
-                        label_visibility="collapsed",
-                        key="main_uploader",
-                    )
-                    if raw_files:
-                        st.session_state['uploaded_file_data'] = [
-                            {'name': f.name, 'data': f.getvalue(), 'type': f.type}
-                            for f in raw_files
-                        ]
-                        st.rerun()
+                    if DEMO_MODE:
+                        st.markdown("<div style='text-align:center; color:#bbb; font-size:13px; padding-top:20px;'>📷 데모 모드에서는<br>업로드가 비활성화됩니다</div>", unsafe_allow_html=True)
+                    else:
+                        raw_files = st.file_uploader(
+                            "영수증 이미지 업로드",
+                            type=['jpg', 'jpeg', 'png'],
+                            accept_multiple_files=True,
+                            label_visibility="collapsed",
+                            key="main_uploader",
+                        )
+                        if raw_files:
+                            st.session_state['uploaded_file_data'] = [
+                                {'name': f.name, 'data': f.getvalue(), 'type': f.type}
+                                for f in raw_files
+                            ]
+                            st.rerun()
                 else:
                     st.image(_io.BytesIO(fd['data']), use_column_width=True)
                     if idx == 0 and st.button("🔄 새 영수증", use_container_width=True):
@@ -185,10 +190,10 @@ def page_upload():
     # for 루프 마지막 fd/result/ocr_data 값 재사용
     st.divider()
     memo_key = f"memo_input_{fd['name']}" if fd else "memo_input_empty"
-    memo_val = st.text_area("메모 (일기)", key=memo_key, disabled=(fd is None), height=108)
+    memo_val = st.text_area("메모 (일기)", key=memo_key, disabled=(fd is None or DEMO_MODE), height=108)
 
     if st.button("💾 저장", key="save_btn", use_container_width=True,
-                 type="primary", disabled=(fd is None or result.get('status') != 'success')):
+                 type="primary", disabled=(fd is None or result.get('status') != 'success' or DEMO_MODE)):
         with st.spinner("저장 중..."):
             try:
                 date_str2 = ocr_data.get("date", "")
@@ -361,7 +366,7 @@ def page_upload():
 
         st.write("")
         with st.columns([3, 7])[0]:
-            if st.button(f"🗑️ 선택 영수증 삭제 ({len(selected_ids)}건)", disabled=(len(selected_ids) == 0), use_container_width=True, type="primary"):
+            if st.button(f"🗑️ 선택 영수증 삭제 ({len(selected_ids)}건)", disabled=(len(selected_ids) == 0 or DEMO_MODE), use_container_width=True, type="primary"):
                 st.session_state['confirm_delete'] = True
                 st.session_state['delete_ids'] = selected_ids
                 st.session_state['delete_image_paths'] = selected_image_paths

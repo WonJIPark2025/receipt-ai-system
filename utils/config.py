@@ -55,6 +55,13 @@ GEMINI_API_KEY = _get_config("GEMINI_API_KEY")
 
 DEFAULT_USER_ID = 1
 
+# =============================================================================
+# 데모 모드
+# =============================================================================
+# DEMO_MODE=true 설정 시 업로드/저장/삭제 기능이 비활성화됩니다.
+
+DEMO_MODE = _get_config("DEMO_MODE", "false").lower() == "true"
+
 
 def check_env():
     """
