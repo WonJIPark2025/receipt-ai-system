@@ -138,10 +138,16 @@ def extract_receipt_data(image_path: str) -> dict:
     }
 
 
-def resolve_activity_tag(item_name: str) -> str | None:
-    """품목명에서 activity_tag 추론 (caffeine / alcohol / None)"""
+def resolve_activity_tag(item_name: str, hour: int | None = None) -> str | None:
+    """품목명과 결제 시간으로 activity_tag 추론
+
+    우선순위: caffeine/alcohol(품목 키워드) > late_snack(22시 이후)
+    hour: paid_at에서 추출한 결제 시각 (0~23), None이면 시간 판단 생략
+    """
     name = item_name.lower()
     for tag, keywords in ACTIVITY_RULES.items():
         if any(kw in name for kw in keywords):
             return tag
+    if hour is not None and hour >= 22:
+        return "late_snack"
     return None
