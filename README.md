@@ -2,6 +2,8 @@
 
 영수증 이미지를 업로드하면 Gemini가 소비 데이터를 자동 추출·저장하고, AI가 지출 패턴을 분석·조언하는 개인 고도화 시스템.
 
+**데모:** https://active-learning-labeler-muragd5a7nqhyyycxgkmpk.streamlit.app/
+
 ## 개요
 
 영수증 이미지를 업로드하면 Gemini가 가게명 / 날짜 / 합계 / 카테고리 / 구매 방식 / 품목을 한 번에 추출하고 DB에 저장한다.
@@ -28,32 +30,38 @@ receipt-ai-system/
 │
 ├── backend/                        # Supabase 연동 API 레이어
 │   ├── database.py                 # 클라이언트 싱글톤
-│   ├── models.py                   # 데이터 모델
-│   └── api/                        # 테이블별 CRUD
+│   ├── models.py                   # 테이블명 상수
+│   └── api/
 │       ├── receipts.py
 │       ├── receipt_items.py
 │       ├── receipt_embeddings.py
 │       ├── categories.py
-│       ├── users.py
 │       └── storage.py
 │
 ├── services/
 │   └── ai/                         # AI 서비스
 │       ├── gemini.py               # Gemini 영수증 분석 (추출 + 추론 통합)
-│       ├── validator.py            # 필수값 검증 (success / review_required / error)
+│       ├── validator.py            # 필수값 검증
 │       ├── embedder.py             # RAG용 텍스트 임베딩
 │       ├── analyzer.py             # Gemini 소비 분석
-│       └── rag/                    # RAG 기반 조언 (구현 예정)
+│       └── chat.py                 # AI 챗봇 서비스
 │
 ├── utils/
-│   └── config.py                   # 환경변수 로드
+│   └── config.py                   # 환경변수 로드 / 데모 모드 플래그
 │
 ├── tests/
-│   ├── test_setup.py               # 환경 검증 (DB + Storage)
-│   └── test_ai/                    # Gemini / 벡터 DB 테스트 및 평가
+│   ├── test_setup.py
+│   └── test_ai/
 │
 ├── data/
-│   └── receipts/                   # 평가용 영수증 이미지
+│   ├── receipts/                   # 평가용 영수증 이미지
+│   └── receipt-ai-system_logo.png
+│
+├── docs/
+│   └── migrations/                 # DB 마이그레이션 SQL
+│
+├── .streamlit/
+│   └── config.toml                 # Streamlit Cloud 서버 설정
 │
 ├── .env.example
 ├── environment.yml
@@ -74,7 +82,7 @@ receipt-ai-system/
 [Validation] 필수값 검증 → success / review_required / error
     │
     ▼
-사용자가 프론트엔드에서 내용 확인·수정 후 "저장" 클릭
+사용자가 메모 입력 후 "저장" 클릭
     │
     ▼
 [DB 저장] receipts + receipt_items + 임베딩(RAG)
@@ -88,8 +96,9 @@ receipt-ai-system/
 | Supabase 백엔드 API (CRUD) | 완료 |
 | Streamlit 프론트엔드 (데스크톱 / 모바일) | 완료 |
 | RAG 임베딩 저장 | 완료 |
-| 소비 패턴 분석 및 조언 | Supabase 연동 작업 중 |
-| RAG 기반 맞춤 조언 | 예정 |
+| AI 챗봇 서비스 | 완료 |
+| 데모 모드 (읽기 전용 배포) | 완료 |
+| RAG 기반 챗봇 라우터 | 개발 중 |
 
 ## 환경 설정
 
@@ -113,3 +122,4 @@ streamlit run frontend/app.py
 | `SUPABASE_URL` | Supabase 프로젝트 URL |
 | `SUPABASE_KEY` | Supabase anon key |
 | `GEMINI_API_KEY` | Gemini API 키 |
+| `DEMO_MODE` | `true` 설정 시 읽기 전용 모드 |
