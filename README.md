@@ -2,7 +2,7 @@
 
 영수증 이미지를 업로드하면 Gemini가 소비 데이터를 자동 추출·저장하고, AI가 지출 패턴을 분석·조언하는 개인 고도화 시스템.
 
-**데모:** https://active-learning-labeler-muragd5a7nqhyyycxgkmpk.streamlit.app/
+**데모:** https://receipt-ai-system-dnvkxt4j4upcgsf8cwampq.streamlit.app/
 
 ## 개요
 
